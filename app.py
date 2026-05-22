@@ -21,12 +21,7 @@ COL_INDEX = {
 # Load the data
 @st.cache_data
 def load_data():
-<<<<<<< HEAD
-    # IMPORTANT: Ensure this filename matches EXACTLY what is in your GitHub repo!
     df = pd.read_csv('cleaned_full_bls_data.csv') 
-=======
-    df = pd.read_csv('cleaned_full_bls_data.csv') # Ensure you are using the zip file from earlier!
->>>>>>> 855806d17bc6cb6c8a71b342be6de7bba74c3516
     
     # Map area types
     area_mapping = {
@@ -81,11 +76,8 @@ if search_query:
     filtered_df = filtered_df[filtered_df['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
 
 # Set the wage column to use based on the user's toggle choice
-<<<<<<< HEAD
-wage_col = 'ADJ_A_MEDIAN
-=======
 wage_col = 'ADJ_A_MEDIAN' if use_col else 'A_MEDIAN'
-wage_label = 'COL-Adjusted Median Annual Wage ($)' if use_col else 'Raw Median Annual Wage ($)'
+wage_label = 'COL-Adjusted Median Wage ($)' if use_col else 'Raw Median Wage ($)'
 
 # Main Dashboard
 col1, col2 = st.columns([1, 1])
@@ -109,14 +101,20 @@ with col2:
                            title="Top Occupations by Employment")
         st.plotly_chart(emp_chart, use_container_width=True)
 
-# Detailed Table
-st.subheader("Detailed Job Data")
-display_cols = ['AREA_TITLE', 'OCC_TITLE', 'TOT_EMP', 'A_MEDIAN', 'COL_INDEX', 'ADJ_A_MEDIAN']
-st.dataframe(filtered_df[display_cols].style.format({
-    'A_MEDIAN': '${:,.0f}',
-    'ADJ_A_MEDIAN': '${:,.0f}',
-    'COL_INDEX': '{:.1f}'
-}), use_container_width=True)
+# Detailed Table with PERCENTAGE DIFFERENCE
+st.subheader("Detailed Job Data & Area Comparison")
+
+if not filtered_df.empty:
+    filtered_df['Max_Wage_for_Job'] = filtered_df.groupby('OCC_TITLE')[wage_col].transform('max')
+    filtered_df['% of Highest Paying Area'] = filtered_df[wage_col] / filtered_df['Max_Wage_for_Job']
+
+    display_cols = ['AREA_TITLE', 'OCC_TITLE', 'TOT_EMP', 'A_MEDIAN', 'COL_INDEX', 'ADJ_A_MEDIAN', '% of Highest Paying Area']
+    st.dataframe(filtered_df[display_cols].style.format({
+        'A_MEDIAN': '${:,.0f}',
+        'ADJ_A_MEDIAN': '${:,.0f}',
+        'COL_INDEX': '{:.1f}',
+        '% of Highest Paying Area': '{:.1%}' 
+    }), use_container_width=True)
 
 # Deep Dive Comparison
 if search_query:
@@ -126,10 +124,8 @@ if search_query:
     compare_df = filtered_by_type[filtered_by_type['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
     
     if not compare_df.empty:
-        # Show top 10 highest paying areas based on selected wage type
         top_areas = compare_df.sort_values(wage_col, ascending=False).head(10)
         
-        # Create a side-by-side grouped bar chart to show both Raw and Adjusted wages
         melted_df = top_areas.melt(id_vars=['AREA_TITLE'], value_vars=['A_MEDIAN', 'ADJ_A_MEDIAN'], 
                                    var_name='Wage Type', value_name='Amount')
         melted_df['Wage Type'] = melted_df['Wage Type'].map({'A_MEDIAN': 'Raw Wage', 'ADJ_A_MEDIAN': 'Real (COL Adjusted) Wage'})
@@ -139,4 +135,3 @@ if search_query:
                          labels={'Amount': 'Annual Wage ($)', 'AREA_TITLE': 'Area'})
         fig_top.update_layout(yaxis={'categoryorder':'total ascending'})
         st.plotly_chart(fig_top, use_container_width=True)
->>>>>>> 855806d17bc6cb6c8a71b342be6de7bba74c3516

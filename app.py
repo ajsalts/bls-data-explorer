@@ -90,4 +90,64 @@ with col1:
                      labels={wage_col: wage_label, 'AREA_TITLE': 'Area'},
                      color=wage_col, color_continuous_scale='Viridis')
         fig.update_xaxes(tickangle=45, tickmode='array')
-        st.plotly_chart(fig, use_container_
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Please select areas or search for a job to see comparisons.")
+
+with col2:
+    st.subheader("Employment Distribution")
+    if not filtered_df.empty:
+        emp_chart = px.pie(filtered_df.nlargest(10, 'TOT_EMP'), values='TOT_EMP', names='OCC_TITLE',
+                           title="Top Occupations by Employment")
+        st.plotly_chart(emp_chart, use_container_width=True)
+
+# Detailed Table with VISUAL PROGRESS BARS
+st.subheader("Detailed Job Data & Area Comparison")
+
+if not filtered_df.empty:
+    # 1. Group by Job Title to find the highest wage
+    filtered_df['Max_Wage_for_Job'] = filtered_df.groupby('OCC_TITLE')[wage_col].transform('max')
+    
+    # 2. Calculate the ratio, multiply by 100 to get a solid integer percentage
+    filtered_df['% of Highest Paying Area'] = (filtered_df[wage_col] / filtered_df['Max_Wage_for_Job']) * 100
+
+    display_cols = ['AREA_TITLE', 'OCC_TITLE', 'TOT_EMP', 'A_MEDIAN', 'COL_INDEX', 'ADJ_A_MEDIAN', '% of Highest Paying Area']
+    
+    # 3. Use Streamlit Column Config for the beautiful visual bars
+    st.dataframe(
+        filtered_df[display_cols],
+        column_config={
+            "A_MEDIAN": st.column_config.NumberColumn("Raw Wage", format="$%d"),
+            "ADJ_A_MEDIAN": st.column_config.NumberColumn("Real Wage", format="$%d"),
+            "COL_INDEX": st.column_config.NumberColumn("COL Index", format="%.1f"),
+            "% of Highest Paying Area": st.column_config.ProgressColumn(
+                "% of Top Area",
+                help="Visual comparison to the highest paying area in your selection.",
+                format="%d%%",
+                min_value=0,
+                max_value=100,
+            ),
+        },
+        hide_index=True,
+        use_container_width=True
+    )
+
+# Deep Dive Comparison
+if search_query:
+    st.divider()
+    st.subheader(f"National Deep Dive: {search_query} ({selected_area_type})")
+    
+    compare_df = filtered_by_type[filtered_by_type['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
+    
+    if not compare_df.empty:
+        top_areas = compare_df.sort_values(wage_col, ascending=False).head(10)
+        
+        melted_df = top_areas.melt(id_vars=['AREA_TITLE'], value_vars=['A_MEDIAN', 'ADJ_A_MEDIAN'], 
+                                   var_name='Wage Type', value_name='Amount')
+        melted_df['Wage Type'] = melted_df['Wage Type'].map({'A_MEDIAN': 'Raw Wage', 'ADJ_A_MEDIAN': 'Real (COL Adjusted) Wage'})
+        
+        fig_top = px.bar(melted_df, x='Amount', y='AREA_TITLE', color='Wage Type', orientation='h', barmode='group',
+                         title=f"Top 10 Paying Areas for '{search_query}' (Raw vs. Real Wage)",
+                         labels={'Amount': 'Annual Wage ($)', 'AREA_TITLE': 'Area'})
+        fig_top.update_layout(yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig_top, use_container_width=True)

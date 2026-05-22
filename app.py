@@ -21,7 +21,7 @@ MERIC_COL_INDEX = {
 
 @st.cache_data
 def load_bls_data():
-    """Loads the core market wage data."""
+    """Loads the core market wage data from BLS."""
     try:
         df = pd.read_csv('cleaned_full_bls_data.csv') 
         area_mapping = {
@@ -45,7 +45,7 @@ if not df_bls.empty:
     filtered_by_type = df_bls[df_bls['AREA_TYPE_LABEL'] == selected_area_type].copy()
     all_areas = sorted(filtered_by_type['AREA_TITLE'].unique())
 
-    # Smart defaults for comparison
+    # Smart defaults for demo
     default_areas = [a for a in all_areas if any(city in a for city in ["San Francisco", "Boulder", "New York", "Austin"])]
     selected_areas = st.sidebar.multiselect("Select Specific Areas", all_areas, default=default_areas[:2])
     search_query = st.sidebar.text_input("Job Title Search", "Data Scientist")
@@ -74,32 +74,36 @@ if col_source == "EPI (Family Budget)" and os.path.exists("epi_data.csv"):
         
         filtered_by_type = pd.merge(filtered_by_type, epi_clean, left_on='AREA_TITLE', right_on='Clean_Name', how='left')
         
-        # NORMALIZE EPI TO THE ANCHOR
+        # NORMALIZE TO ANCHOR
         if baseline_area in epi_clean['Clean_Name'].values:
             base_budget = epi_clean[epi_clean['Clean_Name'] == baseline_area]['ANNUAL_BUDGET'].values[0]
             filtered_by_type['COL_INDEX'] = (filtered_by_type['ANNUAL_BUDGET'] / base_budget) * 100
-        else:
-            filtered_by_type['COL_INDEX'] = (filtered_by_type['ANNUAL_BUDGET'] / filtered_by_type['ANNUAL_BUDGET'].mean()) * 100
-            
     except Exception as e:
         st.sidebar.error(f"EPI Error: {e}")
 
-# --- DATA PROCESSING: BEA ---
+# --- DATA PROCESSING: BEA (FIXED FOR CATEGORIES) ---
 elif col_source == "BEA (Price Parity)" and os.path.exists("bea_data.csv"):
     try:
         bea_df = pd.read_csv("bea_data.csv").dropna(axis=1, how='all')
-        name_s, val_s = bea_df.iloc[:, 1], bea_df.iloc[:, -1]
+        
+        # FILTER: Only keep the 'All items' row to avoid duplicates
+        mask = bea_df.apply(lambda row: row.astype(str).str.contains('All items').any(), axis=1)
+        bea_df_filtered = bea_df[mask].copy()
+
+        # MSA name usually in 2nd column, Value in last
+        name_s, val_s = bea_df_filtered.iloc[:, 1], bea_df_filtered.iloc[:, -1]
+        
         bea_clean = pd.DataFrame({
             'Clean_Name': name_s.astype(str).str.replace(r" \(Metropolitan Statistical Area\)", "", regex=True).str.strip(),
             'COL_VAL': pd.to_numeric(val_s, errors='coerce')
         }).dropna()
+        
         filtered_by_type = pd.merge(filtered_by_type, bea_clean, left_on='AREA_TITLE', right_on='Clean_Name', how='left')
         
+        # NORMALIZE TO ANCHOR
         if baseline_area in bea_clean['Clean_Name'].values:
             base_val = bea_clean[bea_clean['Clean_Name'] == baseline_area]['COL_VAL'].values[0]
             filtered_by_type['COL_INDEX'] = (filtered_by_type['COL_VAL'] / base_val) * 100
-        else:
-            filtered_by_type['COL_INDEX'] = filtered_by_type['COL_VAL']
     except Exception as e:
         st.sidebar.error(f"BEA Error: {e}")
 
@@ -114,17 +118,17 @@ final_df = filtered_by_type[filtered_by_type['AREA_TITLE'].isin(selected_areas)]
 if search_query:
     final_df = final_df[final_df['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
 
-st.title("📊 Geographic Pay Banding Explorer")
+st.title("📊 Strategic Geo-Pay Explorer")
 
 if not final_df.empty:
     c1, c2 = st.columns(2)
     with c1:
-        st.subheader("Market Wages (BLS Data)")
-        st.plotly_chart(px.bar(final_df, x='AREA_TITLE', y='A_MEDIAN', color='A_MEDIAN', color_continuous_scale='Blues', labels={'A_MEDIAN': 'Median Wage'}), use_container_width=True)
+        st.subheader("Market Wages (BLS)")
+        st.plotly_chart(px.bar(final_df, x='AREA_TITLE', y='A_MEDIAN', color='A_MEDIAN', color_continuous_scale='Blues'), use_container_width=True)
     with c2:
-        st.subheader("Cost of Living (Indexed)")
+        st.subheader(f"Cost of Living Index (Anchor: {baseline_area})")
         color = '#9467bd' if col_source == "EPI (Family Budget)" else '#FFA500'
-        st.plotly_chart(px.bar(final_df.drop_duplicates('AREA_TITLE'), x='AREA_TITLE', y='COL_INDEX', color_discrete_sequence=[color], labels={'COL_INDEX': 'Index (Anchor=100)'}), use_container_width=True)
+        st.plotly_chart(px.bar(final_df.drop_duplicates('AREA_TITLE'), x='AREA_TITLE', y='COL_INDEX', color_discrete_sequence=[color]), use_container_width=True)
 
     st.divider()
     st.subheader(f"🎯 Pay Differentials vs {baseline_area}")
@@ -142,10 +146,10 @@ if not final_df.empty:
                 "A_MEDIAN": st.column_config.NumberColumn("Market Wage", format="$%d"),
                 "Market Gap %": st.column_config.NumberColumn("Market vs Anchor", format="%+.1f%%"),
                 "COL Gap %": st.column_config.NumberColumn("COL vs Anchor", format="%+.1f%%"),
-                "Gap Variance": st.column_config.NumberColumn("Variance", format="%+.1f%%", help="Positive = Pay Premium City, Negative = COL Squeeze City")
+                "Gap Variance": st.column_config.NumberColumn("Variance", format="%+.1f%%")
             }, hide_index=True, use_container_width=True
         )
     else:
-        st.warning("Please include the Baseline Area in your selection.")
+        st.warning("Ensure the Baseline Area is in your selection.")
 else:
-    st.info("Select regions and search for a job to begin.")
+    st.info("Select regions and search for a job title to begin.")

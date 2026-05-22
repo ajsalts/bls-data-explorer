@@ -4,7 +4,7 @@ import plotly.express as px
 import os
 
 # Set page config
-st.set_page_config(page_title="Strategic Geo-Pay Tool", layout="wide")
+st.set_page_config(page_title="Geo-Pay Banding Tool", layout="wide")
 
 # --- DATA SOURCE: MERIC (State-Level Fallback) ---
 MERIC_COL_INDEX = {
@@ -21,90 +21,147 @@ MERIC_COL_INDEX = {
 
 @st.cache_data
 def load_bls_data():
-    df = pd.read_csv('cleaned_full_bls_data.csv') 
-    area_mapping = {1: 'National', 2: 'State', 4: 'Metro Area', 6: 'Non-Metro'}
-    df['AREA_TYPE_LABEL'] = df['AREA_TYPE'].map(area_mapping)
-    return df
+    """Loads the core market wage data."""
+    try:
+        df = pd.read_csv('cleaned_full_bls_data.csv') 
+        area_mapping = {
+            1: 'National (U.S.)', 2: 'State', 3: 'U.S. Territory', 
+            4: 'Metropolitan Area (City/Region)', 6: 'Nonmetropolitan Area'
+        }
+        df['AREA_TYPE_LABEL'] = df['AREA_TYPE'].map(area_mapping)
+        return df
+    except Exception as e:
+        st.error(f"Error loading BLS data: {e}")
+        return pd.DataFrame()
 
 df_bls = load_bls_data()
 
-# --- SIDEBAR: GEOGRAPHY & JOB ---
-st.sidebar.header("1. Locations & Roles")
-all_areas = sorted(df_bls['AREA_TITLE'].unique())
-selected_areas = st.sidebar.multiselect("Select Areas", all_areas, default=[a for a in all_areas if "San Francisco" in a or "Boulder" in a][:2])
-search_query = st.sidebar.text_input("Job Title Search", "Data Scientist")
-baseline_area = st.sidebar.selectbox("Baseline Area (Anchor)", options=selected_areas if selected_areas else all_areas)
+# --- SIDEBAR FILTERS ---
+st.sidebar.header("1. Filter Locations")
+if not df_bls.empty:
+    area_types = df_bls['AREA_TYPE_LABEL'].dropna().unique()
+    selected_area_type = st.sidebar.selectbox("Geographic Level", options=area_types, index=list(area_types).index('Metropolitan Area (City/Region)') if 'Metropolitan Area (City/Region)' in area_types else 0)
+
+    filtered_by_type = df_bls[df_bls['AREA_TYPE_LABEL'] == selected_area_type].copy()
+    all_areas = sorted(filtered_by_type['AREA_TITLE'].unique())
+
+    # Smart defaults for demo
+    default_areas = [a for a in all_areas if any(city in a for city in ["San Francisco", "Boulder", "New York", "Austin"])]
+    selected_areas = st.sidebar.multiselect("Select Specific Areas", all_areas, default=default_areas[:3])
+    search_query = st.sidebar.text_input("Job Title Search", "Data Scientist")
+else:
+    st.error("BLS Data file not found.")
 
 st.sidebar.divider()
-st.sidebar.header("2. Benchmark Settings")
-col_source = st.sidebar.radio("COL Data Source", options=["MERIC (State)", "BEA (Price Parity)", "EPI (Family Budget)"])
+st.sidebar.header("2. Comp Planning Settings")
+baseline_area = st.sidebar.selectbox("Baseline Area (0% Anchor)", options=selected_areas if selected_areas else ["Select Areas First"])
 
-# --- EPI ENHANCEMENT: DECODER RING ---
-family_map = {
-    "1p0c": "1 Adult, 0 Children", "1p1c": "1 Adult, 1 Child", "1p2c": "1 Adult, 2 Children",
-    "2p0c": "2 Adults, 0 Children", "2p2c": "2 Adults, 2 Children"
-}
+col_source = st.sidebar.radio("COL Data Source", options=["MERIC (State Index)", "BEA (Price Parity)", "EPI (Annual Family Budget)"])
 
-if col_source == "EPI (Family Budget)" and os.path.exists("epi_data.csv"):
-    epi_df = pd.read_csv("epi_data.csv", skiprows=1)
-    available_codes = sorted(epi_df['Family'].unique())
-    friendly_options = [family_map.get(code, code) for code in available_codes]
-    
-    selected_friendly = st.sidebar.selectbox("Family Profile", options=friendly_options)
-    # Map back to code
-    selected_family = [code for code, name in family_map.items() if name == selected_friendly][0]
-    
-    epi_filtered = epi_df[epi_df['Family'] == selected_family].copy()
-    total_col = 'Total.1' if 'Total.1' in epi_filtered.columns else 'Total'
-    
-    epi_clean = pd.DataFrame({
-        'Clean_Name': epi_filtered['Areaname'].str.replace(" MSA", "").str.strip(),
-        'COL_VAL': pd.to_numeric(epi_filtered[total_col], errors='coerce')
-    }).dropna()
-    
-    df_bls = pd.merge(df_bls, epi_clean, left_on='AREA_TITLE', right_on='Clean_Name', how='left')
-    df_bls['COL_INDEX'] = df_bls['COL_VAL']
+# --- COL LOGIC: EPI FAMILY BUDGET ---
+if col_source == "EPI (Annual Family Budget)" and os.path.exists("epi_data.csv"):
+    try:
+        # EPI CSV often has two header rows. We detect and clean it.
+        test_df = pd.read_csv("epi_data.csv", nrows=5)
+        skip = 1 if 'case_id' not in test_df.columns else 0
+        epi_df = pd.read_csv("epi_data.csv", skiprows=skip)
+        
+        # Family Type Selection
+        family_list = sorted(epi_df['Family'].unique())
+        selected_family = st.sidebar.selectbox("EPI Family Type", options=family_list, index=0, help="1p0c = 1 Adult, 0 Child. 2p2c = 2 Adult, 2 Child.")
+        
+        # Filter for family and get Annual Total
+        epi_filtered = epi_df[epi_df['Family'] == selected_family].copy()
+        total_col = 'Total.1' if 'Total.1' in epi_filtered.columns else 'Total'
+        
+        epi_clean = pd.DataFrame({
+            'Clean_Name': epi_filtered['Areaname'].astype(str).str.replace(r" MSA", "", regex=True).str.strip(),
+            'COL_VAL': pd.to_numeric(epi_filtered[total_col], errors='coerce')
+        }).dropna(subset=['COL_VAL']).drop_duplicates(subset=['Clean_Name'])
+        
+        filtered_by_type = pd.merge(filtered_by_type, epi_clean, left_on='AREA_TITLE', right_on='Clean_Name', how='left')
+        filtered_by_type['COL_INDEX'] = filtered_by_type['COL_VAL']
+    except Exception as e:
+        st.sidebar.error(f"EPI Processing Error: {e}")
 
-# Fallback/Other COL sources
-if 'COL_INDEX' not in df_bls.columns:
-    df_bls['COL_INDEX'] = df_bls['PRIM_STATE'].map(MERIC_COL_INDEX).fillna(100.0)
+# --- COL LOGIC: BEA PRICE PARITY ---
+elif col_source == "BEA (Price Parity)" and os.path.exists("bea_data.csv"):
+    try:
+        bea_df = pd.read_csv("bea_data.csv").dropna(axis=1, how='all')
+        name_s = bea_df.iloc[:, 1].squeeze()
+        val_s = bea_df.iloc[:, -1].squeeze()
+        bea_clean = pd.DataFrame({
+            'Clean_Name': name_s.astype(str).str.replace(r" \(Metropolitan Statistical Area\)", "", regex=True).str.strip(),
+            'COL_VAL': pd.to_numeric(val_s, errors='coerce')
+        }).dropna(subset=['COL_VAL']).drop_duplicates(subset=['Clean_Name'])
+        filtered_by_type = pd.merge(filtered_by_type, bea_clean, left_on='AREA_TITLE', right_on='Clean_Name', how='left')
+        filtered_by_type['COL_INDEX'] = filtered_by_type['COL_VAL']
+    except Exception as e:
+        st.sidebar.error(f"BEA Processing Error: {e}")
 
-# --- MAIN UI ---
-st.title("⚖️ Geo-Pay Strategy Dashboard")
+# --- FALLBACK: MERIC STATE DATA ---
+if 'COL_INDEX' not in filtered_by_type.columns:
+    filtered_by_type['COL_INDEX'] = filtered_by_type['PRIM_STATE'].map(MERIC_COL_INDEX).fillna(100.0)
+else:
+    filtered_by_type['COL_INDEX'] = filtered_by_type['COL_INDEX'].fillna(filtered_by_type['PRIM_STATE'].map(MERIC_COL_INDEX).fillna(100.0))
 
-final_df = df_bls[df_bls['AREA_TITLE'].isin(selected_areas)].copy()
+# --- MAIN APP UI ---
+st.title("📊 Strategic Geo-Pay Planner")
+st.markdown("Analyze market wage data against cost-of-living benchmarks to build equitable pay bands.")
+
+# Filter by selected areas and search query
+final_df = filtered_by_type[filtered_by_type['AREA_TITLE'].isin(selected_areas)].copy()
 if search_query:
     final_df = final_df[final_df['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
 
 if not final_df.empty:
-    # Calculation Logic
+    # 1. High-Level Metrics
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Market Wage Comparison")
+        fig_wage = px.bar(final_df, x='AREA_TITLE', y='A_MEDIAN', color='A_MEDIAN', 
+                          labels={'A_MEDIAN':'Median Annual Wage', 'AREA_TITLE':''},
+                          color_continuous_scale='Blues')
+        st.plotly_chart(fig_wage, use_container_width=True)
+    
+    with col2:
+        st.subheader("Cost of Living Benchmark")
+        # Color based on data source
+        color_seq = ['#9467bd'] if col_source == "EPI (Annual Family Budget)" else ['#FFA500']
+        fig_col = px.bar(final_df.drop_duplicates('AREA_TITLE'), x='AREA_TITLE', y='COL_INDEX', 
+                         labels={'COL_INDEX':'COL Metric', 'AREA_TITLE':''},
+                         color_discrete_sequence=color_seq)
+        st.plotly_chart(fig_col, use_container_width=True)
+
+    # 2. Detailed Pay Differential Calculator
+    st.divider()
+    st.subheader(f"🎯 Geographic Pay Differentials (Anchor: {baseline_area})")
+    
     base_rows = final_df[final_df['AREA_TITLE'] == baseline_area]
     if not base_rows.empty:
-        bw, bc = base_rows['A_MEDIAN'].mean(), base_rows['COL_INDEX'].mean()
-        final_df['Market Gap %'] = ((final_df['A_MEDIAN'] - bw) / bw) * 100
-        final_df['COL Gap %'] = ((final_df['COL_INDEX'] - bc) / bc) * 100
-        final_df['Variance'] = final_df['Market Gap %'] - final_df['COL Gap %']
+        base_wage = base_rows['A_MEDIAN'].mean()
+        base_col = base_rows['COL_INDEX'].mean()
+        
+        final_df['Market Gap %'] = ((final_df['A_MEDIAN'] - base_wage) / base_wage) * 100
+        final_df['COL Gap %'] = ((final_df['COL_INDEX'] - base_col) / base_col) * 100
+        final_df['Gap Variance'] = final_df['Market Gap %'] - final_df['COL Gap %']
 
-        # Visuals
-        c1, c2 = st.columns(2)
-        c1.plotly_chart(px.bar(final_df, x='AREA_TITLE', y='Market Gap %', title="Market Wage Differential", color_discrete_sequence=['#1f77b4']), use_container_width=True)
-        c2.plotly_chart(px.bar(final_df.drop_duplicates('AREA_TITLE'), x='AREA_TITLE', y='COL Gap %', title="Cost of Living Differential", color_discrete_sequence=['#9467bd']), use_container_width=True)
-
-        st.subheader("Data Comparison Table")
-        st.dataframe(final_df[['AREA_TITLE', 'A_MEDIAN', 'Market Gap %', 'COL Gap %', 'Variance']],
-                     column_config={"A_MEDIAN": st.column_config.NumberColumn("Salary", format="$%d"),
-                                    "Market Gap %": st.column_config.NumberColumn("Market", format="%+.1f%%"),
-                                    "COL Gap %": st.column_config.NumberColumn("COL", format="%+.1f%%"),
-                                    "Variance": st.column_config.NumberColumn("Variance", format="%+.1f%%")}, 
-                     hide_index=True, use_container_width=True)
-
-        # Strategy Box
-        v_val = final_df[final_df['AREA_TITLE'] != baseline_area]['Variance'].mean()
-        st.divider()
-        st.subheader("💡 Employer Strategy Recommendation")
-        if v_val < -10:
-            st.error(f"**Caution:** Large Negative Variance ({v_val:.1f}%). The market is underpaying relative to cost-of-living. A full market discount may lead to high turnover.")
-        elif v_val > 10:
-            st.warning(f"**Labor Heat:** Large Positive Variance ({v_val:.1f}%). High competition for talent is driving wages up faster than cost-of-living.")
-        else:
-            st.success(f"**Balanced:** Small Variance ({v_val:.1f}%). Market wages and cost-of-living are in sync. Standard geo-pay adjustments are safe.")
+        st.dataframe(
+            final_df[['AREA_TITLE', 'OCC_TITLE', 'A_MEDIAN', 'COL_INDEX', 'Market Gap %', 'COL Gap %', 'Gap Variance']],
+            column_config={
+                "AREA_TITLE": "Region",
+                "OCC_TITLE": "Job Title",
+                "A_MEDIAN": st.column_config.NumberColumn("Market Wage", format="$%d"),
+                "COL_INDEX": st.column_config.NumberColumn("COL Value", format="$%d" if col_source == "EPI (Annual Family Budget)" else "%.1f"),
+                "Market Gap %": st.column_config.NumberColumn("Market vs Anchor", format="%+.1f%%"),
+                "COL Gap %": st.column_config.NumberColumn("COL vs Anchor", format="%+.1f%%"),
+                "Gap Variance": st.column_config.NumberColumn("Pay Strategy Variance", format="%+.1f%%", help="Positive means market wages are rising faster than local COL. Negative means COL is outpacing local wages.")
+            },
+            hide_index=True, use_container_width=True
+        )
+        
+        st.info("💡 **Strategy Hint:** If 'Pay Strategy Variance' is highly negative, you may need a 'Cost of Living Adjustment' (COLA) to remain competitive, even if market wages haven't shifted yet.")
+    else:
+        st.warning(f"Please include the Baseline Area ({baseline_area}) in your 'Select Specific Areas' filter to see comparisons.")
+else:
+    st.info("👈 Select locations and search for a job title in the sidebar to begin analysis.")

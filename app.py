@@ -21,8 +21,12 @@ COL_INDEX = {
 # Load the data
 @st.cache_data
 def load_data():
+<<<<<<< HEAD
     # IMPORTANT: Ensure this filename matches EXACTLY what is in your GitHub repo!
     df = pd.read_csv('cleaned_full_bls_data.csv') 
+=======
+    df = pd.read_csv('cleaned_full_bls_data.csv') # Ensure you are using the zip file from earlier!
+>>>>>>> 855806d17bc6cb6c8a71b342be6de7bba74c3516
     
     # Map area types
     area_mapping = {
@@ -77,4 +81,62 @@ if search_query:
     filtered_df = filtered_df[filtered_df['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
 
 # Set the wage column to use based on the user's toggle choice
+<<<<<<< HEAD
 wage_col = 'ADJ_A_MEDIAN
+=======
+wage_col = 'ADJ_A_MEDIAN' if use_col else 'A_MEDIAN'
+wage_label = 'COL-Adjusted Median Annual Wage ($)' if use_col else 'Raw Median Annual Wage ($)'
+
+# Main Dashboard
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.subheader("Wage Comparison")
+    if not filtered_df.empty:
+        chart_data = filtered_df.groupby('AREA_TITLE')[wage_col].mean().reset_index().sort_values(wage_col, ascending=False)
+        fig = px.bar(chart_data, x='AREA_TITLE', y=wage_col, 
+                     labels={wage_col: wage_label, 'AREA_TITLE': 'Area'},
+                     color=wage_col, color_continuous_scale='Viridis')
+        fig.update_xaxes(tickangle=45, tickmode='array')
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Please select areas or search for a job to see comparisons.")
+
+with col2:
+    st.subheader("Employment Distribution")
+    if not filtered_df.empty:
+        emp_chart = px.pie(filtered_df.nlargest(10, 'TOT_EMP'), values='TOT_EMP', names='OCC_TITLE',
+                           title="Top Occupations by Employment")
+        st.plotly_chart(emp_chart, use_container_width=True)
+
+# Detailed Table
+st.subheader("Detailed Job Data")
+display_cols = ['AREA_TITLE', 'OCC_TITLE', 'TOT_EMP', 'A_MEDIAN', 'COL_INDEX', 'ADJ_A_MEDIAN']
+st.dataframe(filtered_df[display_cols].style.format({
+    'A_MEDIAN': '${:,.0f}',
+    'ADJ_A_MEDIAN': '${:,.0f}',
+    'COL_INDEX': '{:.1f}'
+}), use_container_width=True)
+
+# Deep Dive Comparison
+if search_query:
+    st.divider()
+    st.subheader(f"National Deep Dive: {search_query} ({selected_area_type})")
+    
+    compare_df = filtered_by_type[filtered_by_type['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
+    
+    if not compare_df.empty:
+        # Show top 10 highest paying areas based on selected wage type
+        top_areas = compare_df.sort_values(wage_col, ascending=False).head(10)
+        
+        # Create a side-by-side grouped bar chart to show both Raw and Adjusted wages
+        melted_df = top_areas.melt(id_vars=['AREA_TITLE'], value_vars=['A_MEDIAN', 'ADJ_A_MEDIAN'], 
+                                   var_name='Wage Type', value_name='Amount')
+        melted_df['Wage Type'] = melted_df['Wage Type'].map({'A_MEDIAN': 'Raw Wage', 'ADJ_A_MEDIAN': 'Real (COL Adjusted) Wage'})
+        
+        fig_top = px.bar(melted_df, x='Amount', y='AREA_TITLE', color='Wage Type', orientation='h', barmode='group',
+                         title=f"Top 10 Paying Areas for '{search_query}' (Raw vs. Real Wage)",
+                         labels={'Amount': 'Annual Wage ($)', 'AREA_TITLE': 'Area'})
+        fig_top.update_layout(yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig_top, use_container_width=True)
+>>>>>>> 855806d17bc6cb6c8a71b342be6de7bba74c3516

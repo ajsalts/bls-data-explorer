@@ -23,25 +23,19 @@ COL_INDEX = {
 def load_data():
     df = pd.read_csv('cleaned_full_bls_data.csv') 
     
-    # Map area types
     area_mapping = {
         1: 'National (U.S.)', 2: 'State', 3: 'U.S. Territory', 
         4: 'Metropolitan Area (City/Region)', 6: 'Nonmetropolitan Area'
     }
     df['AREA_TYPE_LABEL'] = df['AREA_TYPE'].map(area_mapping)
-    
-    # Add COL Index based on the primary state (PRIM_STATE)
     df['COL_INDEX'] = df['PRIM_STATE'].map(COL_INDEX).fillna(100.0)
-    
-    # Calculate Adjusted Wages
-    df['ADJ_A_MEDIAN'] = df['A_MEDIAN'] / (df['COL_INDEX'] / 100)
     
     return df
 
 df = load_data()
 
-st.title("📊 Comprehensive BLS Job Explorer (May 2025)")
-st.markdown("Search, compare, and analyze employment and wage data. **Includes Cost of Living (COL) Adjustments!**")
+st.title("📊 Geo-Pay Banding & BLS Job Explorer")
+st.markdown("Set a baseline city and calculate the exact percentage to adjust pay based on Local Market Rates or Cost of Living.")
 
 # Sidebar Filters
 st.sidebar.header("Filter Options")
@@ -54,45 +48,40 @@ all_areas = sorted(filtered_by_type['AREA_TITLE'].unique())
 
 default_areas = []
 if "Metropolitan" in selected_area_type:
-    default_areas = [a for a in all_areas if "New York" in a or "Los Angeles" in a][:2]
+    default_areas = [a for a in all_areas if "New York" in a or "San Francisco" in a or "Boulder" in a][:3]
 elif "State" in selected_area_type:
-    default_areas = ["California", "Texas", "New York"]
+    default_areas = ["California", "Colorado", "New York"]
 
 if not default_areas and len(all_areas) > 0:
     default_areas = [all_areas[0]]
 
 selected_areas = st.sidebar.multiselect("Select Specific Areas", all_areas, default=default_areas)
-search_query = st.sidebar.text_input("Search Job Title (e.g., Software, Nurse, Manager)", "")
 
-# COL Toggle
+# Baseline Area Selector
 st.sidebar.divider()
-st.sidebar.subheader("Advanced Settings")
-use_col = st.sidebar.toggle("Adjust for Cost of Living", value=False, 
-                            help="Recalculates wages based on the state's cost of living. (National Avg = 100)")
+st.sidebar.subheader("Pay Scale Settings")
+baseline_area = st.sidebar.selectbox("Select Baseline Area (0% Anchor)", options=selected_areas, 
+                                     help="Choose the city you want to base your pay scale on. Other cities will show how much to adjust pay up or down.")
+
+search_query = st.sidebar.text_input("Search Job Title (e.g., Data Scientist, Software)", "")
 
 # Apply Filters
-filtered_df = filtered_by_type[filtered_by_type['AREA_TITLE'].isin(selected_areas)]
+filtered_df = filtered_by_type[filtered_by_type['AREA_TITLE'].isin(selected_areas)].copy()
 if search_query:
     filtered_df = filtered_df[filtered_df['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
-
-# Set the wage column to use based on the user's toggle choice
-wage_col = 'ADJ_A_MEDIAN' if use_col else 'A_MEDIAN'
-wage_label = 'COL-Adjusted Median Wage ($)' if use_col else 'Raw Median Wage ($)'
 
 # Main Dashboard
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("Wage Comparison")
+    st.subheader("Raw Market Wage Comparison")
     if not filtered_df.empty:
-        chart_data = filtered_df.groupby('AREA_TITLE')[wage_col].mean().reset_index().sort_values(wage_col, ascending=False)
-        fig = px.bar(chart_data, x='AREA_TITLE', y=wage_col, 
-                     labels={wage_col: wage_label, 'AREA_TITLE': 'Area'},
-                     color=wage_col, color_continuous_scale='Viridis')
+        chart_data = filtered_df.groupby('AREA_TITLE')['A_MEDIAN'].mean().reset_index().sort_values('A_MEDIAN', ascending=False)
+        fig = px.bar(chart_data, x='AREA_TITLE', y='A_MEDIAN', 
+                     labels={'A_MEDIAN': 'Median Wage ($)', 'AREA_TITLE': 'Area'},
+                     color='A_MEDIAN', color_continuous_scale='Viridis')
         fig.update_xaxes(tickangle=45, tickmode='array')
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Please select areas or search for a job to see comparisons.")
 
 with col2:
     st.subheader("Employment Distribution")
@@ -101,51 +90,42 @@ with col2:
                            title="Top Occupations by Employment")
         st.plotly_chart(emp_chart, use_container_width=True)
 
-# Detailed Table
-st.subheader("Detailed Job Data & Area Comparison")
+# Detailed Table - HR COMPENSATION VIEW
+st.subheader("HR Geo-Pay Scale Calculator")
 
-if not filtered_df.empty:
-    # 1. Group by Job Title to find the highest wage
-    filtered_df['Max_Wage_for_Job'] = filtered_df.groupby('OCC_TITLE')[wage_col].transform('max')
+if not filtered_df.empty and baseline_area:
+    # 1. Get Baseline Metrics
+    baseline_wages = filtered_df[filtered_df['AREA_TITLE'] == baseline_area].set_index('OCC_TITLE')['A_MEDIAN']
+    filtered_df['Baseline_Raw_Wage'] = filtered_df['OCC_TITLE'].map(baseline_wages)
     
-    # 2. Calculate how much LESS they are paid compared to the top area
-    filtered_df['% Less Than Top Area'] = (1 - (filtered_df[wage_col] / filtered_df['Max_Wage_for_Job'])) * 100
+    baseline_col_df = filtered_df[filtered_df['AREA_TITLE'] == baseline_area]
+    baseline_col = baseline_col_df['COL_INDEX'].iloc[0] if not baseline_col_df.empty else 100.0
+    
+    # 2. Market Rate Adjustment (% Difference in Raw Wages)
+    filtered_df['Market Pay Adjustment'] = ((filtered_df['A_MEDIAN'] - filtered_df['Baseline_Raw_Wage']) / filtered_df['Baseline_Raw_Wage']) * 100
+    
+    # 3. COL Equivalent Adjustment (% Difference in Cost of Living)
+    filtered_df['COL Equivalent Adjustment'] = ((filtered_df['COL_INDEX'] - baseline_col) / baseline_col) * 100
 
-    display_cols = ['AREA_TITLE', 'OCC_TITLE', 'TOT_EMP', 'A_MEDIAN', 'COL_INDEX', 'ADJ_A_MEDIAN', '% Less Than Top Area']
+    display_cols = ['AREA_TITLE', 'OCC_TITLE', 'A_MEDIAN', 'COL_INDEX', 'Market Pay Adjustment', 'COL Equivalent Adjustment']
     
-    # 3. Use Streamlit Column Config
+    # 4. Streamlit Column Config
     st.dataframe(
         filtered_df[display_cols],
         column_config={
-            "A_MEDIAN": st.column_config.NumberColumn("Raw Wage", format="$%d"),
-            "ADJ_A_MEDIAN": st.column_config.NumberColumn("Real Wage", format="$%d"),
-            "COL_INDEX": st.column_config.NumberColumn("COL Index", format="%.1f"),
-            "% Less Than Top Area": st.column_config.NumberColumn(
-                "Pay Difference vs Top",
-                help="How much less this area pays compared to the highest paying area in your selection.",
-                format="-%d%%", # Adds a negative sign so it reads as a deficit (e.g., -15%)
+            "A_MEDIAN": st.column_config.NumberColumn("Local Market Wage", format="$%d"),
+            "COL_INDEX": st.column_config.NumberColumn("Local COL Index", format="%.1f"),
+            "Market Pay Adjustment": st.column_config.NumberColumn(
+                "Market Rate vs Baseline",
+                help=f"How much less/more LOCAL EMPLOYERS actually pay compared to {baseline_area}.",
+                format="%+.1f%%", 
+            ),
+            "COL Equivalent Adjustment": st.column_config.NumberColumn(
+                "COL vs Baseline",
+                help=f"How much cheaper/more expensive it is to LIVE there compared to {baseline_area}.",
+                format="%+.1f%%", 
             ),
         },
         hide_index=True,
         use_container_width=True
     )
-
-# Deep Dive Comparison
-if search_query:
-    st.divider()
-    st.subheader(f"National Deep Dive: {search_query} ({selected_area_type})")
-    
-    compare_df = filtered_by_type[filtered_by_type['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
-    
-    if not compare_df.empty:
-        top_areas = compare_df.sort_values(wage_col, ascending=False).head(10)
-        
-        melted_df = top_areas.melt(id_vars=['AREA_TITLE'], value_vars=['A_MEDIAN', 'ADJ_A_MEDIAN'], 
-                                   var_name='Wage Type', value_name='Amount')
-        melted_df['Wage Type'] = melted_df['Wage Type'].map({'A_MEDIAN': 'Raw Wage', 'ADJ_A_MEDIAN': 'Real (COL Adjusted) Wage'})
-        
-        fig_top = px.bar(melted_df, x='Amount', y='AREA_TITLE', color='Wage Type', orientation='h', barmode='group',
-                         title=f"Top 10 Paying Areas for '{search_query}' (Raw vs. Real Wage)",
-                         labels={'Amount': 'Annual Wage ($)', 'AREA_TITLE': 'Area'})
-        fig_top.update_layout(yaxis={'categoryorder':'total ascending'})
-        st.plotly_chart(fig_top, use_container_width=True)

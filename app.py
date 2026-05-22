@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import os
+import re
 
 # Set page config
 st.set_page_config(page_title="Strategic Geo-Pay Planner", layout="wide")
@@ -10,24 +11,16 @@ st.set_page_config(page_title="Strategic Geo-Pay Planner", layout="wide")
 def clean_geo_name(name):
     """Normalizes names like 'San Francisco-Oakland, CA' to 'San Francisco, CA'"""
     if pd.isna(name): return ""
+    # Remove common suffixes found in BEA and EPI data
     name = str(name).split(" HUD")[0].split(" MSA")[0].split(" (Metropolitan")[0].strip()
     if "," in name:
         parts = name.split(",")
+        # Take the first city listed (e.g., 'San Francisco' from 'San Francisco-Oakland')
         city_part = parts[0].split("-")[0].strip() 
+        # Take the state abbreviation
         state_part = parts[1].strip().split(" ")[0].strip() 
         return f"{city_part}, {state_part}"
     return name
-
-# --- NEW: INTERPRETATION LOGIC ---
-def interpret_variance(var):
-    if var <= -10:
-        return "⚠️ COL Squeeze (High Risk)"
-    elif var >= 10:
-        return "🔥 Market Heat (Pay More)"
-    elif -5 <= var <= 5:
-        return "✅ Balanced (Safe to Cut)"
-    else:
-        return "⚖️ Neutral"
 
 # --- DATA SOURCE: MERIC (State-Level Fallback) ---
 MERIC_COL_INDEX = {
@@ -65,8 +58,10 @@ else:
 st.sidebar.divider()
 st.sidebar.header("2. Comp Planning Settings")
 baseline_area = st.sidebar.selectbox("Baseline Area (Anchor)", options=selected_areas if selected_areas else ["Select Areas First"])
+# RESTORED: Added BEA back to the radio options
 col_source = st.sidebar.radio("COL Data Source", options=["MERIC (State)", "BEA (Price Parity)", "EPI (Family Budget)"])
 
+# We'll use this to track if we successfully mapped city-level data
 col_mapped = False
 final_df = pd.DataFrame()
 
@@ -86,7 +81,8 @@ if col_source == "EPI (Family Budget)" and os.path.exists("epi_data.csv"):
         }).dropna().drop_duplicates('JOIN_NAME')
         
         final_df = df_bls[df_bls['AREA_TITLE'].isin(selected_areas)].copy()
-        if search_query: final_df = final_df[final_df['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
+        if search_query:
+            final_df = final_df[final_df['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
             
         final_df = pd.merge(final_df, epi_clean, on='JOIN_NAME', how='left')
         
@@ -98,10 +94,11 @@ if col_source == "EPI (Family Budget)" and os.path.exists("epi_data.csv"):
     except Exception as e:
         st.sidebar.error(f"EPI Error: {e}")
 
-# --- DATA PROCESSING: BEA ---
+# --- DATA PROCESSING: BEA (Restored Logic) ---
 elif col_source == "BEA (Price Parity)" and os.path.exists("bea_data.csv"):
     try:
         bea_df = pd.read_csv("bea_data.csv").dropna(axis=1, how='all')
+        # Filter specifically for 'All items' to resolve multiple-row issue
         mask = bea_df.apply(lambda row: row.astype(str).str.contains('All items').any(), axis=1)
         bea_df_filtered = bea_df[mask].copy()
 
@@ -112,7 +109,8 @@ elif col_source == "BEA (Price Parity)" and os.path.exists("bea_data.csv"):
         }).dropna().drop_duplicates('JOIN_NAME')
         
         final_df = df_bls[df_bls['AREA_TITLE'].isin(selected_areas)].copy()
-        if search_query: final_df = final_df[final_df['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
+        if search_query:
+            final_df = final_df[final_df['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
             
         final_df = pd.merge(final_df, bea_clean, on='JOIN_NAME', how='left')
         
@@ -124,13 +122,15 @@ elif col_source == "BEA (Price Parity)" and os.path.exists("bea_data.csv"):
     except Exception as e:
         st.sidebar.error(f"BEA Error: {e}")
 
-# --- FALLBACK: MERIC ---
+# --- FALLBACK: MERIC (Or if Merge Failed) ---
 if not col_mapped:
     final_df = df_bls[df_bls['AREA_TITLE'].isin(selected_areas)].copy()
-    if search_query: final_df = final_df[final_df['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
+    if search_query:
+        final_df = final_df[final_df['OCC_TITLE'].str.contains(search_query, case=False, na=False)]
     
     if not final_df.empty:
         final_df['RAW_MERIC'] = final_df['PRIM_STATE'].map(MERIC_COL_INDEX).fillna(100.0)
+        # Normalize MERIC to Anchor
         anchor_state = df_bls[df_bls['AREA_TITLE'] == baseline_area]['PRIM_STATE'].iloc[0] if baseline_area in all_areas else 'US'
         anchor_val = MERIC_COL_INDEX.get(anchor_state, 100.0)
         final_df['COL_INDEX'] = (final_df['RAW_MERIC'] / anchor_val) * 100
@@ -139,14 +139,15 @@ if not col_mapped:
 st.title("📊 Strategic Geo-Pay Explorer")
 
 if not final_df.empty:
+    # Calculations for Gaps
     base_rows = final_df[final_df['AREA_TITLE'] == baseline_area]
     if not base_rows.empty:
         bw = base_rows['A_MEDIAN'].mean()
         final_df['Market Gap %'] = ((final_df['A_MEDIAN'] - bw) / bw) * 100
         final_df['COL Gap %'] = (final_df['COL_INDEX'] - 100.0)
         final_df['Gap Variance'] = final_df['Market Gap %'] - final_df['COL Gap %']
-        final_df['Action'] = final_df['Gap Variance'].apply(interpret_variance)
 
+        # Charts
         c1, c2 = st.columns(2)
         with c1:
             st.plotly_chart(px.bar(final_df, x='AREA_TITLE', y='A_MEDIAN', title="Market Wages (BLS)", color_discrete_sequence=['#1f77b4']), use_container_width=True)
@@ -154,16 +155,14 @@ if not final_df.empty:
             col_color = '#9467bd' if col_source == "EPI (Family Budget)" else '#ff7f0e'
             st.plotly_chart(px.bar(final_df.drop_duplicates('AREA_TITLE'), x='AREA_TITLE', y='COL_INDEX', title=f"COL Index (Anchor: {baseline_area}=100)", color_discrete_sequence=[col_color]), use_container_width=True)
 
-        st.divider()
-        st.subheader("📋 Compensation Strategy Table")
+        # Table
         st.dataframe(
-            final_df[['AREA_TITLE', 'OCC_TITLE', 'A_MEDIAN', 'Market Gap %', 'COL Gap %', 'Gap Variance', 'Action']],
+            final_df[['AREA_TITLE', 'OCC_TITLE', 'A_MEDIAN', 'Market Gap %', 'COL Gap %', 'Gap Variance']],
             column_config={
                 "A_MEDIAN": st.column_config.NumberColumn("Market Wage", format="$%d"),
-                "Market Gap %": st.column_config.NumberColumn("Market Gap", format="%+.1f%%"),
-                "COL Gap %": st.column_config.NumberColumn("COL Gap", format="%+.1f%%"),
-                "Gap Variance": st.column_config.NumberColumn("Variance", format="%+.1f%%"),
-                "Action": st.column_config.TextColumn("Interpretation")
+                "Market Gap %": st.column_config.NumberColumn("Market vs Anchor", format="%+.1f%%"),
+                "COL Gap %": st.column_config.NumberColumn("COL vs Anchor", format="%+.1f%%"),
+                "Gap Variance": st.column_config.NumberColumn("Variance", format="%+.1f%%")
             }, hide_index=True, use_container_width=True
         )
 else:

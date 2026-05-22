@@ -101,31 +101,29 @@ with col2:
                            title="Top Occupations by Employment")
         st.plotly_chart(emp_chart, use_container_width=True)
 
-# Detailed Table with VISUAL PROGRESS BARS
+# Detailed Table
 st.subheader("Detailed Job Data & Area Comparison")
 
 if not filtered_df.empty:
     # 1. Group by Job Title to find the highest wage
     filtered_df['Max_Wage_for_Job'] = filtered_df.groupby('OCC_TITLE')[wage_col].transform('max')
     
-    # 2. Calculate the ratio, multiply by 100 to get a solid integer percentage
-    filtered_df['% of Highest Paying Area'] = (filtered_df[wage_col] / filtered_df['Max_Wage_for_Job']) * 100
+    # 2. Calculate how much LESS they are paid compared to the top area
+    filtered_df['% Less Than Top Area'] = (1 - (filtered_df[wage_col] / filtered_df['Max_Wage_for_Job'])) * 100
 
-    display_cols = ['AREA_TITLE', 'OCC_TITLE', 'TOT_EMP', 'A_MEDIAN', 'COL_INDEX', 'ADJ_A_MEDIAN', '% of Highest Paying Area']
+    display_cols = ['AREA_TITLE', 'OCC_TITLE', 'TOT_EMP', 'A_MEDIAN', 'COL_INDEX', 'ADJ_A_MEDIAN', '% Less Than Top Area']
     
-    # 3. Use Streamlit Column Config for the beautiful visual bars
+    # 3. Use Streamlit Column Config
     st.dataframe(
         filtered_df[display_cols],
         column_config={
             "A_MEDIAN": st.column_config.NumberColumn("Raw Wage", format="$%d"),
             "ADJ_A_MEDIAN": st.column_config.NumberColumn("Real Wage", format="$%d"),
             "COL_INDEX": st.column_config.NumberColumn("COL Index", format="%.1f"),
-            "% of Highest Paying Area": st.column_config.ProgressColumn(
-                "% of Top Area",
-                help="Visual comparison to the highest paying area in your selection.",
-                format="%d%%",
-                min_value=0,
-                max_value=100,
+            "% Less Than Top Area": st.column_config.NumberColumn(
+                "Pay Difference vs Top",
+                help="How much less this area pays compared to the highest paying area in your selection.",
+                format="-%d%%", # Adds a negative sign so it reads as a deficit (e.g., -15%)
             ),
         },
         hide_index=True,

@@ -90,23 +90,4 @@ with col1:
                      labels={wage_col: wage_label, 'AREA_TITLE': 'Area'},
                      color=wage_col, color_continuous_scale='Viridis')
         fig.update_xaxes(tickangle=45, tickmode='array')
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Please select areas or search for a job to see comparisons.")
-
-with col2:
-    st.subheader("Employment Distribution")
-    if not filtered_df.empty:
-        emp_chart = px.pie(filtered_df.nlargest(10, 'TOT_EMP'), values='TOT_EMP', names='OCC_TITLE',
-                           title="Top Occupations by Employment")
-        st.plotly_chart(emp_chart, use_container_width=True)
-
-# Detailed Table with VISUAL PROGRESS BARS
-st.subheader("Detailed Job Data & Area Comparison")
-
-if not filtered_df.empty:
-    # 1. Group by Job Title to find the highest wage
-    filtered_df['Max_Wage_for_Job'] = filtered_df.groupby('OCC_TITLE')[wage_col].transform('max')
-    
-    # 2. Calculate the ratio, multiply by 100 to get a solid integer percentage
-    filtered_df['% of Highest Paying Area'] = (filtered_df[wage
+        st.plotly_chart(fig, use_container_

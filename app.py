@@ -22,7 +22,7 @@ COL_INDEX = {
 # Load the data
 @st.cache_data
 def load_data():
-    df = pd.read_csv('cleaned_full_bls_data.zip') # Ensure you are using the zip file from earlier!
+    df = pd.read_csv('cleaned_full_bls_data.csv') # Ensure you are using the zip file from earlier!
     
     # Map area types
     area_mapping = {
